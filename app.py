@@ -264,7 +264,7 @@ class HumbleBundleScraper(GameScraper):
             return []
 
 class ItchIOScraper(GameScraper):
-    """Itch.io - Games with 100% discount (was paid, now free)"""
+    """Itch.io - Games with 100% discount ONLY (was paid, now free)"""
     
     def __init__(self):
         super().__init__("Itch.io", "PC")
@@ -279,69 +279,80 @@ class ItchIOScraper(GameScraper):
             soup = BeautifulSoup(response.content, 'html.parser')
             games = []
             
-            for game_div in soup.find_all('div', class_='game_cell')[:20]:  # Check 20 games
+            # Find all game cells
+            game_cells = soup.find_all('div', class_='game_cell')
+            
+            for cell in game_cells:
                 try:
-                    title_tag = game_div.find('a', class_='title')
+                    # Look for the sale badge with -100%
+                    sale_badge = cell.find('div', class_='sale_tag')
+                    
+                    # CRITICAL: Only proceed if it's -100% discount
+                    if not sale_badge:
+                        continue
+                    
+                    badge_text = sale_badge.get_text().strip()
+                    if '-100%' not in badge_text:
+                        continue  # Skip if not 100% off
+                    
+                    # Now we know it's 100% off, get the details
+                    title_tag = cell.find('a', class_='title')
                     if not title_tag:
                         continue
                     
-                    title = title_tag.text.strip()
+                    title = title_tag.get_text().strip()
                     game_url = urljoin('https://itch.io', title_tag.get('href', ''))
                     
                     # Get image
-                    img_tag = game_div.find('img')
-                    image_url = img_tag.get('data-lazy_src', '') or img_tag.get('src', '') if img_tag else ''
+                    img_tag = cell.find('img')
+                    image_url = ''
+                    if img_tag:
+                        image_url = img_tag.get('data-lazy_src', '') or img_tag.get('src', '')
                     
-                    # Check for sale price info
-                    price_tag = game_div.find('div', class_='price_value')
-                    sale_tag = game_div.find('div', class_='sale_price')
+                    # Get original price
+                    price_container = cell.find('div', class_='price_value')
+                    original_price = 'Was Paid'
                     
-                    # Look for -100% or games that went from paid to free
-                    original_price = None
-                    is_free_now = False
+                    if price_container:
+                        # Look for original price (before discount)
+                        price_text = price_container.get_text()
+                        # The original price is usually shown before the $0
+                        if '$' in price_text:
+                            import re
+                            prices = re.findall(r'\$[\d.]+', price_text)
+                            if len(prices) >= 2:
+                                original_price = prices[0]  # First price is usually original
+                            elif len(prices) == 1 and '$0' not in prices[0]:
+                                original_price = prices[0]
                     
-                    if price_tag:
-                        price_text = price_tag.get_text().strip().lower()
-                        if 'free' in price_text or '$0' in price_text:
-                            is_free_now = True
-                    
-                    if sale_tag:
-                        sale_text = sale_tag.get_text().strip()
-                        # Check if it shows original price (meaning it was paid before)
+                    # Also check for sale price element
+                    sale_price = cell.find('div', class_='sale_price')
+                    if sale_price and not original_price.startswith('$'):
+                        sale_text = sale_price.get_text().strip()
                         if '$' in sale_text:
-                            original_price = sale_text
-                            is_free_now = True
+                            original_price = sale_text.split('$')[1].split()[0]
+                            original_price = f"${original_price}"
                     
-                    # Also check discount percentage
-                    discount_tag = game_div.find('div', class_='sale_tag')
-                    if discount_tag:
-                        discount_text = discount_tag.get_text().strip()
-                        if '100%' in discount_text:
-                            is_free_now = True
-                            original_price = 'Was Paid'
+                    games.append({
+                        'title': title,
+                        'store': self.store_name,
+                        'platform': self.platform,
+                        'description': f'100% OFF! Was {original_price}, now FREE on Itch.io',
+                        'image_url': image_url,
+                        'game_url': game_url,
+                        'original_price': original_price,
+                        'end_date': 'Limited time sale',
+                        'store_logo': 'https://static.itch.io/images/itchio-textless-black.svg'
+                    })
                     
-                    # Only add if it's free now and had a price before
-                    if is_free_now and (original_price or discount_tag):
-                        games.append({
-                            'title': title,
-                            'store': self.store_name,
-                            'platform': self.platform,
-                            'description': 'Limited time free! Was paid, now 100% off on Itch.io',
-                            'image_url': image_url,
-                            'game_url': game_url,
-                            'original_price': original_price or 'Was Paid',
-                            'end_date': '',
-                            'store_logo': 'https://static.itch.io/images/itchio-textless-black.svg'
-                        })
+                    if len(games) >= 10:
+                        break
                         
-                        if len(games) >= 10:  # Limit to 10
-                            break
-                            
                 except Exception as e:
                     logger.warning(f"Error parsing Itch.io game: {e}")
                     continue
             
-            logger.info(f"Found {len(games)} games with 100% discount on Itch.io")
+            logger.info(f"Found {len(games)} games with -100% discount on Itch.io")
             return games
             
         except Exception as e:
@@ -491,7 +502,7 @@ class XboxScraper(GameScraper):
             return []
 
 class GooglePlayScraper(GameScraper):
-    """Google Play Games - Android games now $0.00"""
+    """Google Play Games - Android games now $0.00 (was paid)"""
     
     def __init__(self):
         super().__init__("Google Play Games", "Android")
@@ -499,7 +510,7 @@ class GooglePlayScraper(GameScraper):
     def scrape(self) -> List[Dict]:
         try:
             # Google Play games on sale collection
-            url = "https://play.google.com/store/apps/collection/promotion_3002a18_gamesonsale"
+            url = "https://play.google.com/store/apps/collection/promotion_3002a18_gamesonsale?hl=en-US"
             
             # Add specific headers for Google Play
             headers = self.headers.copy()
@@ -511,55 +522,80 @@ class GooglePlayScraper(GameScraper):
             soup = BeautifulSoup(response.content, 'html.parser')
             games = []
             
-            # Google Play uses dynamic content, look for app cards
-            app_cards = soup.find_all('div', class_=lambda x: x and 'card' in str(x).lower())
+            # Google Play has game cards with strikethrough prices and $0.00
+            # Look for all clickable game elements
+            game_links = soup.find_all('a', href=lambda x: x and '/store/apps/details?id=' in str(x))
             
-            for card in app_cards[:15]:
+            for link in game_links[:20]:  # Check more games
                 try:
-                    # Find title
-                    title_elem = card.find(['div', 'span'], class_=lambda x: x and 'title' in str(x).lower())
-                    if not title_elem:
-                        title_elem = card.find('a')
+                    # Get parent container
+                    container = link.find_parent(['div', 'article'])
+                    if not container:
+                        container = link
                     
-                    if not title_elem:
+                    # Find title - usually in an aria-label or direct text
+                    title = link.get('aria-label', '').strip()
+                    if not title:
+                        title_elem = container.find(['h3', 'h4', 'div'], class_=lambda x: x and 'title' in str(x).lower())
+                        if title_elem:
+                            title = title_elem.get_text().strip()
+                    
+                    # Clean title (remove category info)
+                    if title:
+                        title = title.split('\n')[0].strip()
+                    
+                    if not title or len(title) < 2:
                         continue
                     
-                    title = title_elem.get_text().strip()
-                    
-                    # Get link
-                    link = card.find('a', href=True)
-                    game_url = urljoin('https://play.google.com', link['href']) if link else url
+                    # Get URL
+                    game_url = urljoin('https://play.google.com', link.get('href', ''))
                     
                     # Get image
-                    img = card.find('img')
+                    img = container.find('img')
                     image_url = img.get('src', '') or img.get('data-src', '') if img else ''
                     
-                    # Look for price information
-                    price_elem = card.find(['span', 'div'], class_=lambda x: x and 'price' in str(x).lower())
-                    original_price = 'Was Paid'
-                    is_free = False
+                    # Look for price elements
+                    # Current price (should be $0.00)
+                    current_price_elem = container.find(['span', 'div'], string=lambda x: x and '$0.00' in str(x))
                     
-                    if price_elem:
-                        price_text = price_elem.get_text().strip().lower()
-                        # Check if it's now free ($0.00 or "free")
-                        if '$0' in price_text or 'free' in price_text:
-                            is_free = True
-                        # Check if there's a crossed-out price (original price)
-                        strikethrough = card.find(['s', 'del', 'strike'])
-                        if strikethrough:
-                            original_price = strikethrough.get_text().strip()
+                    # Original price (strikethrough)
+                    original_price_elem = container.find(['span', 'div'], class_=lambda x: x and ('original' in str(x).lower() or 'strike' in str(x).lower()))
+                    if not original_price_elem:
+                        # Try finding strikethrough text
+                        original_price_elem = container.find(['s', 'del', 'strike'])
                     
-                    # Only add if it's free now
-                    if is_free:
+                    # Also check aria-label for price info
+                    price_text = link.get('aria-label', '')
+                    
+                    # Determine if it's free now with original price
+                    is_free_now = False
+                    original_price = None
+                    
+                    if current_price_elem or '$0.00' in price_text.lower():
+                        is_free_now = True
+                    
+                    if original_price_elem:
+                        original_price = original_price_elem.get_text().strip()
+                    elif '$' in price_text and '$0.00' not in price_text:
+                        # Extract original price from aria-label
+                        import re
+                        prices = re.findall(r'\$\d+\.\d+', price_text)
+                        if len(prices) >= 2:  # First is original, second is current
+                            original_price = prices[0]
+                        elif len(prices) == 1 and is_free_now:
+                            original_price = prices[0]
+                    
+                    # Only add if it's NOW free AND had a price before
+                    if is_free_now and original_price and original_price != '$0.00':
                         games.append({
                             'title': title,
                             'store': self.store_name,
                             'platform': self.platform,
-                            'description': 'Free Android game on Google Play. Was paid, now $0.00!',
+                            'description': f'Free Android game on Google Play! Was {original_price}, now $0.00',
                             'image_url': image_url,
                             'game_url': game_url,
                             'original_price': original_price,
-                            'end_date': 'Limited time',
+                            'end_date': 'Limited time sale',
                             'store_logo': 'https://www.gstatic.com/android/market_images/web/favicon_v2.ico'
                         })
                         
@@ -570,7 +606,7 @@ class GooglePlayScraper(GameScraper):
                     logger.warning(f"Error parsing Google Play game: {e}")
                     continue
             
-            logger.info(f"Found {len(games)} free games on Google Play")
+            logger.info(f"Found {len(games)} free games on Google Play (was paid)")
             return games
             
         except Exception as e:
