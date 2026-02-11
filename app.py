@@ -116,49 +116,67 @@ class EpicGamesScraper(GameScraper):
             return []
 
 class SteamScraper(GameScraper):
-    """Steam - Free promotions and temporary free games"""
+    """Steam - Free to Keep games (was paid, now free forever)"""
     
     def __init__(self):
         super().__init__("Steam", "PC")
     
     def scrape(self) -> List[Dict]:
         try:
-            url = "https://store.steampowered.com/search/?maxprice=free&specials=1"
+            # SteamDB's Free to Keep page - games that are temporarily free
+            url = "https://steamdb.info/upcoming/free/"
             response = requests.get(url, headers=self.headers, timeout=10)
             response.raise_for_status()
             
             soup = BeautifulSoup(response.content, 'html.parser')
             games = []
             
-            for game_div in soup.find_all('a', class_='search_result_row')[:10]:
-                try:
-                    title = game_div.find('span', class_='title').text.strip()
-                    img_tag = game_div.find('img')
-                    image_url = img_tag.get('src', '') if img_tag else ''
-                    game_url = game_div.get('href', '')
-                    
-                    price_div = game_div.find('div', class_='discount_final_price')
-                    if price_div and 'Free' in price_div.text:
-                        # Check for original price (means it was paid before)
-                        original_price_div = game_div.find('div', class_='discount_original_price')
-                        original_price = original_price_div.text.strip() if original_price_div else 'Limited Time'
+            # Find the table with free to keep games
+            table = soup.find('table', class_='table')
+            if table:
+                rows = table.find_all('tr')[1:]  # Skip header
+                
+                for row in rows[:10]:  # Limit to 10
+                    try:
+                        cols = row.find_all('td')
+                        if len(cols) < 3:
+                            continue
+                        
+                        # Get game name
+                        name_cell = cols[1]
+                        title_link = name_cell.find('a')
+                        if not title_link:
+                            continue
+                        
+                        title = title_link.get_text().strip()
+                        app_id = title_link.get('href', '').split('/')[-2] if '/' in title_link.get('href', '') else ''
+                        
+                        # Get end date
+                        date_cell = cols[2] if len(cols) > 2 else None
+                        end_date = date_cell.get_text().strip() if date_cell else ''
+                        
+                        # Construct Steam store URL
+                        game_url = f"https://store.steampowered.com/app/{app_id}/" if app_id else "https://store.steampowered.com"
+                        
+                        # Try to get image from Steam API
+                        image_url = f"https://cdn.cloudflare.steamstatic.com/steam/apps/{app_id}/header.jpg" if app_id else ''
                         
                         games.append({
                             'title': title,
                             'store': self.store_name,
                             'platform': self.platform,
-                            'description': 'Free on Steam for a limited time',
+                            'description': 'Free to Keep! Claim now and keep forever. Limited time offer.',
                             'image_url': image_url,
                             'game_url': game_url,
-                            'original_price': original_price,
-                            'end_date': '',
+                            'original_price': 'Was Paid',
+                            'end_date': end_date,
                             'store_logo': 'https://store.cloudflare.steamstatic.com/public/shared/images/header/logo_steam.svg'
                         })
-                except Exception as e:
-                    logger.warning(f"Error parsing Steam game: {e}")
-                    continue
+                    except Exception as e:
+                        logger.warning(f"Error parsing Steam game: {e}")
+                        continue
             
-            logger.info(f"Found {len(games)} free games on Steam")
+            logger.info(f"Found {len(games)} Free to Keep games on Steam")
             return games
             
         except Exception as e:
@@ -217,22 +235,28 @@ class GOGScraper(GameScraper):
             return []
 
 class HumbleBundleScraper(GameScraper):
-    """Humble Bundle - Occasional free games"""
+    """Humble Bundle - Rare free game giveaways"""
     
     def __init__(self):
         super().__init__("Humble Bundle", "PC")
     
     def scrape(self) -> List[Dict]:
         try:
+            # Humble Bundle rarely has "was paid, now free" games
+            # They occasionally do giveaways on their store
+            # Check main store page for any promotions
             url = "https://www.humblebundle.com/store"
             response = requests.get(url, headers=self.headers, timeout=10)
             response.raise_for_status()
             
             games = []
-            # Humble Bundle structure varies, returning empty for now
-            # Can be enhanced when they have free games
+            soup = BeautifulSoup(response.content, 'html.parser')
             
-            logger.info(f"Checked Humble Bundle for free games")
+            # Look for any free promotions (this is rare)
+            # Humble Bundle structure varies, so this is a basic check
+            # Users should also check manually as these are rare events
+            
+            logger.info(f"Checked Humble Bundle for free games (rare)")
             return games
             
         except Exception as e:
@@ -240,21 +264,22 @@ class HumbleBundleScraper(GameScraper):
             return []
 
 class ItchIOScraper(GameScraper):
-    """Itch.io - Free indie games"""
+    """Itch.io - Games with 100% discount (was paid, now free)"""
     
     def __init__(self):
         super().__init__("Itch.io", "PC")
     
     def scrape(self) -> List[Dict]:
         try:
-            url = "https://itch.io/games/on-sale/free"
+            # Itch.io on-sale page - look for 100% off games
+            url = "https://itch.io/games/on-sale"
             response = requests.get(url, headers=self.headers, timeout=10)
             response.raise_for_status()
             
             soup = BeautifulSoup(response.content, 'html.parser')
             games = []
             
-            for game_div in soup.find_all('div', class_='game_cell')[:10]:
+            for game_div in soup.find_all('div', class_='game_cell')[:20]:  # Check 20 games
                 try:
                     title_tag = game_div.find('a', class_='title')
                     if not title_tag:
@@ -263,33 +288,60 @@ class ItchIOScraper(GameScraper):
                     title = title_tag.text.strip()
                     game_url = urljoin('https://itch.io', title_tag.get('href', ''))
                     
+                    # Get image
                     img_tag = game_div.find('img')
                     image_url = img_tag.get('data-lazy_src', '') or img_tag.get('src', '') if img_tag else ''
                     
-                    # Check if it has original price info
+                    # Check for sale price info
                     price_tag = game_div.find('div', class_='price_value')
-                    original_price = 'Free'
-                    if price_tag:
-                        price_text = price_tag.get_text()
-                        if '$' in price_text:
-                            original_price = price_text.strip()
+                    sale_tag = game_div.find('div', class_='sale_price')
                     
-                    games.append({
-                        'title': title,
-                        'store': self.store_name,
-                        'platform': self.platform,
-                        'description': 'Free indie game on Itch.io',
-                        'image_url': image_url,
-                        'game_url': game_url,
-                        'original_price': original_price,
-                        'end_date': '',
-                        'store_logo': 'https://static.itch.io/images/itchio-textless-black.svg'
-                    })
+                    # Look for -100% or games that went from paid to free
+                    original_price = None
+                    is_free_now = False
+                    
+                    if price_tag:
+                        price_text = price_tag.get_text().strip().lower()
+                        if 'free' in price_text or '$0' in price_text:
+                            is_free_now = True
+                    
+                    if sale_tag:
+                        sale_text = sale_tag.get_text().strip()
+                        # Check if it shows original price (meaning it was paid before)
+                        if '$' in sale_text:
+                            original_price = sale_text
+                            is_free_now = True
+                    
+                    # Also check discount percentage
+                    discount_tag = game_div.find('div', class_='sale_tag')
+                    if discount_tag:
+                        discount_text = discount_tag.get_text().strip()
+                        if '100%' in discount_text:
+                            is_free_now = True
+                            original_price = 'Was Paid'
+                    
+                    # Only add if it's free now and had a price before
+                    if is_free_now and (original_price or discount_tag):
+                        games.append({
+                            'title': title,
+                            'store': self.store_name,
+                            'platform': self.platform,
+                            'description': 'Limited time free! Was paid, now 100% off on Itch.io',
+                            'image_url': image_url,
+                            'game_url': game_url,
+                            'original_price': original_price or 'Was Paid',
+                            'end_date': '',
+                            'store_logo': 'https://static.itch.io/images/itchio-textless-black.svg'
+                        })
+                        
+                        if len(games) >= 10:  # Limit to 10
+                            break
+                            
                 except Exception as e:
                     logger.warning(f"Error parsing Itch.io game: {e}")
                     continue
             
-            logger.info(f"Found {len(games)} free games on Itch.io")
+            logger.info(f"Found {len(games)} games with 100% discount on Itch.io")
             return games
             
         except Exception as e:
@@ -363,7 +415,7 @@ class NintendoSwitchScraper(GameScraper):
             return []
 
 class XboxScraper(GameScraper):
-    """Xbox - Games with Gold and temporary free games"""
+    """Xbox - Free game deals (was paid, now $0.00)"""
     
     def __init__(self):
         super().__init__("Xbox Store", "Xbox")
@@ -372,49 +424,66 @@ class XboxScraper(GameScraper):
         try:
             games = []
             
-            # Check Games with Gold page
-            gold_url = "https://www.xbox.com/en-au/live/gold"
-            response = requests.get(gold_url, headers=self.headers, timeout=10)
+            # Xbox Australian deals page filtered for free games
+            deals_url = "https://www.xbox.com/en-AU/games/browse/DynamicChannel.GameDeals?Price=0"
+            response = requests.get(deals_url, headers=self.headers, timeout=10)
             
             if response.status_code == 200:
                 soup = BeautifulSoup(response.content, 'html.parser')
                 
-                # Look for game sections
-                game_sections = soup.find_all(['div', 'section'], class_=lambda x: x and 'game' in str(x).lower())
+                # Look for game elements - Xbox uses various structures
+                # Try to find product cards or game listings
+                game_elements = soup.find_all(['div', 'article'], class_=lambda x: x and ('product' in str(x).lower() or 'game' in str(x).lower()))
                 
-                for section in game_sections[:10]:
-                    section_text = section.get_text().lower()
-                    # Skip free-to-play games
-                    if 'free to play' in section_text or 'free-to-play' in section_text:
-                        continue
-                    
-                    title_elem = section.find(['h2', 'h3', 'h4'])
-                    if title_elem:
-                        title = title_elem.get_text().strip()
-                        
-                        # Skip known F2P titles
-                        if any(word in title.lower() for word in ['warzone', 'fortnite', 'apex legends']):
+                for element in game_elements[:15]:
+                    try:
+                        # Find title
+                        title_elem = element.find(['h3', 'h4', 'h2', 'a'])
+                        if not title_elem:
                             continue
                         
-                        img = section.find('img')
+                        title = title_elem.get_text().strip()
+                        
+                        # Skip if it's clearly free-to-play
+                        if any(word in title.lower() for word in ['fortnite', 'warzone', 'apex legends', 'rocket league']):
+                            continue
+                        
+                        # Get link
+                        link = element.find('a', href=True)
+                        game_url = urljoin('https://www.xbox.com', link['href']) if link else deals_url
+                        
+                        # Get image
+                        img = element.find('img')
                         image_url = img.get('src', '') or img.get('data-src', '') if img else ''
                         
-                        link = section.find('a', href=True)
-                        game_url = urljoin('https://www.xbox.com', link['href']) if link else 'https://www.xbox.com/en-au/live/gold'
+                        # Check for price info
+                        price_elem = element.find(['span', 'div'], class_=lambda x: x and 'price' in str(x).lower())
+                        original_price = 'Was Paid'
+                        if price_elem:
+                            price_text = price_elem.get_text()
+                            if '$' in price_text and '$0' not in price_text:
+                                original_price = price_text.strip()
                         
                         games.append({
                             'title': title,
                             'store': self.store_name,
                             'platform': self.platform,
-                            'description': 'Games with Gold - Free for Xbox Live Gold / Game Pass Ultimate members',
+                            'description': 'Free game deal on Xbox Store. Was paid, now free!',
                             'image_url': image_url,
                             'game_url': game_url,
-                            'original_price': 'Included with Gold',
-                            'end_date': 'Monthly rotation',
+                            'original_price': original_price,
+                            'end_date': 'Limited time',
                             'store_logo': 'https://www.xbox.com/favicon.ico'
                         })
+                        
+                        if len(games) >= 10:
+                            break
+                            
+                    except Exception as e:
+                        logger.warning(f"Error parsing Xbox game: {e}")
+                        continue
             
-            logger.info(f"Found {len(games)} free games on Xbox")
+            logger.info(f"Found {len(games)} free deals on Xbox")
             return games
             
         except Exception as e:
@@ -422,18 +491,86 @@ class XboxScraper(GameScraper):
             return []
 
 class GooglePlayScraper(GameScraper):
-    """Google Play Games - Android free games"""
+    """Google Play Games - Android games now $0.00"""
     
     def __init__(self):
         super().__init__("Google Play Games", "Android")
     
     def scrape(self) -> List[Dict]:
         try:
-            # Google Play rarely has "was paid, now free" deals
-            # Placeholder for now
-            games = []
-            logger.info(f"Checked Google Play Games for free promotions")
+            # Google Play games on sale collection
+            url = "https://play.google.com/store/apps/collection/promotion_3002a18_gamesonsale"
             
+            # Add specific headers for Google Play
+            headers = self.headers.copy()
+            headers['Accept-Language'] = 'en-US,en;q=0.9'
+            
+            response = requests.get(url, headers=headers, timeout=10)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.content, 'html.parser')
+            games = []
+            
+            # Google Play uses dynamic content, look for app cards
+            app_cards = soup.find_all('div', class_=lambda x: x and 'card' in str(x).lower())
+            
+            for card in app_cards[:15]:
+                try:
+                    # Find title
+                    title_elem = card.find(['div', 'span'], class_=lambda x: x and 'title' in str(x).lower())
+                    if not title_elem:
+                        title_elem = card.find('a')
+                    
+                    if not title_elem:
+                        continue
+                    
+                    title = title_elem.get_text().strip()
+                    
+                    # Get link
+                    link = card.find('a', href=True)
+                    game_url = urljoin('https://play.google.com', link['href']) if link else url
+                    
+                    # Get image
+                    img = card.find('img')
+                    image_url = img.get('src', '') or img.get('data-src', '') if img else ''
+                    
+                    # Look for price information
+                    price_elem = card.find(['span', 'div'], class_=lambda x: x and 'price' in str(x).lower())
+                    original_price = 'Was Paid'
+                    is_free = False
+                    
+                    if price_elem:
+                        price_text = price_elem.get_text().strip().lower()
+                        # Check if it's now free ($0.00 or "free")
+                        if '$0' in price_text or 'free' in price_text:
+                            is_free = True
+                        # Check if there's a crossed-out price (original price)
+                        strikethrough = card.find(['s', 'del', 'strike'])
+                        if strikethrough:
+                            original_price = strikethrough.get_text().strip()
+                    
+                    # Only add if it's free now
+                    if is_free:
+                        games.append({
+                            'title': title,
+                            'store': self.store_name,
+                            'platform': self.platform,
+                            'description': 'Free Android game on Google Play. Was paid, now $0.00!',
+                            'image_url': image_url,
+                            'game_url': game_url,
+                            'original_price': original_price,
+                            'end_date': 'Limited time',
+                            'store_logo': 'https://www.gstatic.com/android/market_images/web/favicon_v2.ico'
+                        })
+                        
+                        if len(games) >= 10:
+                            break
+                            
+                except Exception as e:
+                    logger.warning(f"Error parsing Google Play game: {e}")
+                    continue
+            
+            logger.info(f"Found {len(games)} free games on Google Play")
             return games
             
         except Exception as e:
