@@ -55,11 +55,18 @@
     <p style="color: #666; margin-bottom: 20px;">Select which game stores you want to monitor for free games</p>
     
     <div class="checkbox-group" id="stores-list">
-        {% for store in ['Epic Games Store', 'Steam', 'GOG', 'Humble Bundle', 'Itch.io', 'Prime Gaming', 'Google Play Games'] %}
+        {% for store in ['Epic Games Store', 'Steam', 'GOG', 'Humble Bundle', 'Itch.io', 'Nintendo Switch', 'Xbox Store', 'Google Play Games', 'Prime Gaming'] %}
         <div class="checkbox-item">
             <input type="checkbox" id="store-{{ loop.index }}" value="{{ store }}" 
                    {% if store in config.enabled_stores %}checked{% endif %}>
-            <label for="store-{{ loop.index }}" style="margin: 0; cursor: pointer;">{{ store }}</label>
+            <label for="store-{{ loop.index }}" style="margin: 0; cursor: pointer;">
+                {% if store == 'Nintendo Switch' %}🕹️
+                {% elif store == 'Xbox Store' %}🎮
+                {% elif store == 'Google Play Games' %}📱
+                {% elif store == 'Prime Gaming' %}❌
+                {% else %}🖥️{% endif %}
+                {{ store }}
+            </label>
         </div>
         {% endfor %}
     </div>
