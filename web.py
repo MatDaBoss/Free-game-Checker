@@ -35,7 +35,6 @@ def index():
     games_from_enabled_stores = [game for game in all_games if game['store'] in enabled_stores]
     
     # Filter out expired games by checking end_date
-    from datetime import datetime
     current_games = []
     for game in games_from_enabled_stores:
         end_date = game.get('end_date', '')
@@ -49,13 +48,17 @@ def index():
         try:
             # Handle ISO format dates (from Epic Games API)
             if 'T' in end_date or 'Z' in end_date:
-                end_datetime = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
-                if end_datetime > datetime.now(end_datetime.tzinfo):
+                # Remove timezone info for simple comparison
+                end_date_clean = end_date.replace('Z', '').split('+')[0].split('.')[0]
+                end_datetime = datetime.fromisoformat(end_date_clean)
+                
+                # Compare to current time (naive comparison, assumes UTC)
+                if end_datetime > datetime.utcnow():
                     current_games.append(game)
             else:
                 # For other date formats, keep the game (can't parse reliably)
                 current_games.append(game)
-        except:
+        except Exception as e:
             # If we can't parse the date, keep the game to be safe
             current_games.append(game)
     
