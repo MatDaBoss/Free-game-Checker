@@ -168,7 +168,10 @@ install_application() {
     pct exec $CTID -- bash -c "apt-get update"
     
     print_info "Installing dependencies..."
-    pct exec $CTID -- bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y python3 python3-pip python3-venv git curl wget"
+    pct exec $CTID -- bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y python3 python3-pip python3-venv git curl wget tzdata"
+    
+    print_info "Setting timezone to Australia/Brisbane..."
+    pct exec $CTID -- bash -c "timedatectl set-timezone Australia/Brisbane || ln -sf /usr/share/zoneinfo/Australia/Brisbane /etc/localtime"
     
     print_info "Creating application user..."
     pct exec $CTID -- bash -c "useradd -r -s /bin/bash -d /opt/free-game-checker gamecheck || true"

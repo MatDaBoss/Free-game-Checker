@@ -502,116 +502,26 @@ class XboxScraper(GameScraper):
             return []
 
 class GooglePlayScraper(GameScraper):
-    """Google Play Games - Android games now $0.00 (was paid)"""
+    """Google Play Games - Disabled (requires browser automation)"""
     
     def __init__(self):
         super().__init__("Google Play Games", "Android")
     
     def scrape(self) -> List[Dict]:
-        try:
-            # Google Play games on sale collection
-            url = "https://play.google.com/store/apps/collection/promotion_3002a18_gamesonsale?hl=en-US"
-            
-            # Add specific headers for Google Play
-            headers = self.headers.copy()
-            headers['Accept-Language'] = 'en-US,en;q=0.9'
-            
-            response = requests.get(url, headers=headers, timeout=10)
-            response.raise_for_status()
-            
-            soup = BeautifulSoup(response.content, 'html.parser')
-            games = []
-            
-            # Google Play has game cards with strikethrough prices and $0.00
-            # Look for all clickable game elements
-            game_links = soup.find_all('a', href=lambda x: x and '/store/apps/details?id=' in str(x))
-            
-            for link in game_links[:20]:  # Check more games
-                try:
-                    # Get parent container
-                    container = link.find_parent(['div', 'article'])
-                    if not container:
-                        container = link
-                    
-                    # Find title - usually in an aria-label or direct text
-                    title = link.get('aria-label', '').strip()
-                    if not title:
-                        title_elem = container.find(['h3', 'h4', 'div'], class_=lambda x: x and 'title' in str(x).lower())
-                        if title_elem:
-                            title = title_elem.get_text().strip()
-                    
-                    # Clean title (remove category info)
-                    if title:
-                        title = title.split('\n')[0].strip()
-                    
-                    if not title or len(title) < 2:
-                        continue
-                    
-                    # Get URL
-                    game_url = urljoin('https://play.google.com', link.get('href', ''))
-                    
-                    # Get image
-                    img = container.find('img')
-                    image_url = img.get('src', '') or img.get('data-src', '') if img else ''
-                    
-                    # Look for price elements
-                    # Current price (should be $0.00)
-                    current_price_elem = container.find(['span', 'div'], string=lambda x: x and '$0.00' in str(x))
-                    
-                    # Original price (strikethrough)
-                    original_price_elem = container.find(['span', 'div'], class_=lambda x: x and ('original' in str(x).lower() or 'strike' in str(x).lower()))
-                    if not original_price_elem:
-                        # Try finding strikethrough text
-                        original_price_elem = container.find(['s', 'del', 'strike'])
-                    
-                    # Also check aria-label for price info
-                    price_text = link.get('aria-label', '')
-                    
-                    # Determine if it's free now with original price
-                    is_free_now = False
-                    original_price = None
-                    
-                    if current_price_elem or '$0.00' in price_text.lower():
-                        is_free_now = True
-                    
-                    if original_price_elem:
-                        original_price = original_price_elem.get_text().strip()
-                    elif '$' in price_text and '$0.00' not in price_text:
-                        # Extract original price from aria-label
-                        import re
-                        prices = re.findall(r'\$\d+\.\d+', price_text)
-                        if len(prices) >= 2:  # First is original, second is current
-                            original_price = prices[0]
-                        elif len(prices) == 1 and is_free_now:
-                            original_price = prices[0]
-                    
-                    # Only add if it's NOW free AND had a price before
-                    if is_free_now and original_price and original_price != '$0.00':
-                        games.append({
-                            'title': title,
-                            'store': self.store_name,
-                            'platform': self.platform,
-                            'description': f'Free Android game on Google Play! Was {original_price}, now $0.00',
-                            'image_url': image_url,
-                            'game_url': game_url,
-                            'original_price': original_price,
-                            'end_date': 'Limited time sale',
-                            'store_logo': 'https://www.gstatic.com/android/market_images/web/favicon_v2.ico'
-                        })
-                        
-                        if len(games) >= 10:
-                            break
-                            
-                except Exception as e:
-                    logger.warning(f"Error parsing Google Play game: {e}")
-                    continue
-            
-            logger.info(f"Found {len(games)} free games on Google Play (was paid)")
-            return games
-            
-        except Exception as e:
-            logger.error(f"Error scraping Google Play Games: {e}")
-            return []
+        """
+        Google Play Store loads content dynamically via JavaScript.
+        Simple HTTP requests cannot access the game data.
+        
+        To enable Google Play scraping, you would need:
+        - Selenium with headless Chrome/Firefox
+        - Or use Google Play's unofficial API
+        - Or manually check: https://play.google.com/store/apps/collection/promotion_3002a18_gamesonsale
+        
+        For now, users should check Google Play manually for $0.00 deals.
+        """
+        logger.info("Google Play scraper disabled - requires JavaScript rendering")
+        logger.info("Manual check: https://play.google.com/store/apps/collection/promotion_3002a18_gamesonsale")
+        return []
 
 class PrimeGamingScraper(GameScraper):
     """Prime Gaming - Disabled"""
@@ -754,6 +664,25 @@ class Database:
         
         conn.close()
         return emails
+    
+    def cleanup_old_games(self, days: int = 7):
+        """Remove games older than specified days"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cutoff_time = datetime.now() - timedelta(days=days)
+        
+        cursor.execute('''
+            DELETE FROM games
+            WHERE last_seen < ?
+        ''', (cutoff_time,))
+        
+        deleted_count = cursor.rowcount
+        conn.commit()
+        conn.close()
+        
+        logger.info(f"Cleaned up {deleted_count} old games from database")
+        return deleted_count
 
 class EmailSender:
     """Email sender with fancy HTML templates and platform icons"""
@@ -998,8 +927,8 @@ def load_config() -> Dict:
         default_config = {
             'email_sender': 'freegamechecker@gmail.com',
             'email_password': '',
-            'schedule_day': 'friday',
-            'schedule_time': '09:00',
+            'schedule_day': 'saturday',
+            'schedule_time': '08:00',
             'enabled_stores': [
                 'Epic Games Store',
                 'Steam',
@@ -1022,6 +951,9 @@ def check_and_send_games():
     
     config = load_config()
     db = Database()
+    
+    # Cleanup old games (older than 7 days)
+    db.cleanup_old_games(days=7)
     
     # Initialize scrapers
     scrapers = {
