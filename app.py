@@ -21,6 +21,14 @@ import re
 from urllib.parse import urljoin
 import os
 
+# Google Play scraper library
+try:
+    from google_play_scraper import search, app as gplay_app
+    GPLAY_AVAILABLE = True
+except ImportError:
+    GPLAY_AVAILABLE = False
+    logging.warning("google-play-scraper not installed. Google Play scraping disabled.")
+
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
@@ -571,26 +579,110 @@ class XboxScraper(GameScraper):
             return []
 
 class GooglePlayScraper(GameScraper):
-    """Google Play Games - Disabled (requires browser automation)"""
+    """Google Play Games - Using google-play-scraper library"""
     
     def __init__(self):
         super().__init__("Google Play Games", "Android")
     
     def scrape(self) -> List[Dict]:
         """
-        Google Play Store loads content dynamically via JavaScript.
-        Simple HTTP requests cannot access the game data.
-        
-        To enable Google Play scraping, you would need:
-        - Selenium with headless Chrome/Firefox
-        - Or use Google Play's unofficial API
-        - Or manually check: https://play.google.com/store/apps/collection/promotion_3002a18_gamesonsale
-        
-        For now, users should check Google Play manually for $0.00 deals.
+        Uses google-play-scraper library to find Android games that are currently free
+        but were previously paid.
         """
-        logger.info("Google Play scraper disabled - requires JavaScript rendering")
-        logger.info("Manual check: https://play.google.com/store/apps/collection/promotion_3002a18_gamesonsale")
-        return []
+        
+        if not GPLAY_AVAILABLE:
+            logger.warning("google-play-scraper library not installed. Run: pip install google-play-scraper")
+            return []
+        
+        games = []
+        
+        try:
+            logger.info("Searching Google Play for free games...")
+            
+            # Search for popular games (more likely to have sales)
+            search_terms = ['games', 'action games', 'adventure games', 'puzzle games']
+            checked_apps = set()
+            
+            for search_term in search_terms:
+                try:
+                    # Search for apps
+                    results = search(
+                        search_term,
+                        lang='en',
+                        country='au',
+                        n_hits=20
+                    )
+                    
+                    for result in results:
+                        app_id = result.get('appId')
+                        
+                        # Skip if already checked
+                        if app_id in checked_apps:
+                            continue
+                        checked_apps.add(app_id)
+                        
+                        try:
+                            # Get detailed app info
+                            details = gplay_app(
+                                app_id,
+                                lang='en',
+                                country='au'
+                            )
+                            
+                            # Check if it's free now
+                            is_free = details.get('free', False)
+                            price = details.get('price', 0)
+                            
+                            # Only include if it's free AND has indication it was paid
+                            # (Google Play API doesn't always show original price for sales)
+                            if is_free and price == 0:
+                                # Check if description or title mentions sale/discount
+                                description = details.get('description', '').lower()
+                                title = details.get('title', '')
+                                
+                                # Look for sale indicators
+                                sale_indicators = ['sale', 'free for limited time', 'limited offer', 
+                                                 'was $', 'now free', 'discount']
+                                has_sale_indicator = any(indicator in description for indicator in sale_indicators)
+                                
+                                # Check in-app purchases price (sometimes indicates original price)
+                                iap_range = details.get('inAppProductPrice', '')
+                                
+                                # If it looks like a sale or has IAP pricing info, include it
+                                if has_sale_indicator or iap_range:
+                                    games.append({
+                                        'title': title,
+                                        'store': self.store_name,
+                                        'platform': self.platform,
+                                        'description': details.get('summary', '')[:200] + '...' if details.get('summary') else 'Free Android game on Google Play',
+                                        'image_url': details.get('icon', ''),
+                                        'game_url': f"https://play.google.com/store/apps/details?id={app_id}",
+                                        'original_price': iap_range if iap_range else 'Was Paid',
+                                        'end_date': 'Limited time',
+                                        'store_logo': 'https://www.gstatic.com/android/market_images/web/favicon_v2.ico'
+                                    })
+                                    
+                                    # Limit to 10 games total
+                                    if len(games) >= 10:
+                                        break
+                                        
+                        except Exception as e:
+                            logger.debug(f"Error checking app {app_id}: {e}")
+                            continue
+                    
+                    if len(games) >= 10:
+                        break
+                        
+                except Exception as e:
+                    logger.warning(f"Error searching Google Play for '{search_term}': {e}")
+                    continue
+            
+            logger.info(f"Found {len(games)} free games on Google Play")
+            return games
+            
+        except Exception as e:
+            logger.error(f"Error scraping Google Play Games: {e}")
+            return []
 
 class PrimeGamingScraper(GameScraper):
     """Prime Gaming - Disabled"""
