@@ -586,8 +586,9 @@ class GooglePlayScraper(GameScraper):
     
     def scrape(self) -> List[Dict]:
         """
-        Uses google-play-scraper library to find Android games that are currently free
-        but were previously paid.
+        Uses google-play-scraper library to find free Android games.
+        Note: Google Play API doesn't show price history, so we check popular
+        free games that might be on sale.
         """
         
         if not GPLAY_AVAILABLE:
@@ -595,87 +596,119 @@ class GooglePlayScraper(GameScraper):
             return []
         
         games = []
+        checked_apps = set()
         
         try:
-            logger.info("Searching Google Play for free games...")
+            logger.info("Checking Google Play for free games on sale...")
             
-            # Search for popular games (more likely to have sales)
-            search_terms = ['games', 'action games', 'adventure games', 'puzzle games']
-            checked_apps = set()
-            
-            for search_term in search_terms:
-                try:
-                    # Search for apps
-                    results = search(
-                        search_term,
-                        lang='en',
-                        country='au',
-                        n_hits=20
-                    )
-                    
-                    for result in results:
-                        app_id = result.get('appId')
-                        
-                        # Skip if already checked
+            # Try to get the "Games on sale" collection directly
+            try:
+                from google_play_scraper import collection, Sort
+                
+                # Get games from the sales collection
+                sale_results = collection(
+                    collection_id='promotion_3002a18_gamesonsale',
+                    lang='en',
+                    country='au',
+                    results=30
+                )
+                
+                logger.info(f"Found {len(sale_results)} games in sales collection")
+                
+                for app_info in sale_results:
+                    try:
+                        app_id = app_info.get('appId')
                         if app_id in checked_apps:
                             continue
                         checked_apps.add(app_id)
                         
-                        try:
-                            # Get detailed app info
-                            details = gplay_app(
-                                app_id,
-                                lang='en',
-                                country='au'
-                            )
-                            
-                            # Check if it's free now
-                            is_free = details.get('free', False)
-                            price = details.get('price', 0)
-                            
-                            # Only include if it's free AND has indication it was paid
-                            # (Google Play API doesn't always show original price for sales)
-                            if is_free and price == 0:
-                                # Check if description or title mentions sale/discount
-                                description = details.get('description', '').lower()
-                                title = details.get('title', '')
-                                
-                                # Look for sale indicators
-                                sale_indicators = ['sale', 'free for limited time', 'limited offer', 
-                                                 'was $', 'now free', 'discount']
-                                has_sale_indicator = any(indicator in description for indicator in sale_indicators)
-                                
-                                # Check in-app purchases price (sometimes indicates original price)
-                                iap_range = details.get('inAppProductPrice', '')
-                                
-                                # If it looks like a sale or has IAP pricing info, include it
-                                if has_sale_indicator or iap_range:
-                                    games.append({
-                                        'title': title,
-                                        'store': self.store_name,
-                                        'platform': self.platform,
-                                        'description': details.get('summary', '')[:200] + '...' if details.get('summary') else 'Free Android game on Google Play',
-                                        'image_url': details.get('icon', ''),
-                                        'game_url': f"https://play.google.com/store/apps/details?id={app_id}",
-                                        'original_price': iap_range if iap_range else 'Was Paid',
-                                        'end_date': 'Limited time',
-                                        'store_logo': 'https://www.gstatic.com/android/market_images/web/favicon_v2.ico'
-                                    })
-                                    
-                                    # Limit to 10 games total
-                                    if len(games) >= 10:
-                                        break
-                                        
-                        except Exception as e:
-                            logger.debug(f"Error checking app {app_id}: {e}")
-                            continue
-                    
-                    if len(games) >= 10:
-                        break
+                        # Get detailed info
+                        details = gplay_app(app_id, lang='en', country='au')
                         
-                except Exception as e:
-                    logger.warning(f"Error searching Google Play for '{search_term}': {e}")
-                    continue
+                        # Check if it's free now
+                        is_free = details.get('free', False)
+                        price = details.get('price', 0)
+                        
+                        if is_free and price == 0:
+                            # It's in the sale collection AND it's free - good candidate!
+                            title = details.get('title', 'Unknown Game')
+                            
+                            games.append({
+                                'title': title,
+                                'store': self.store_name,
+                                'platform': self.platform,
+                                'description': details.get('summary', details.get('description', ''))[:200] + '...' if details.get('summary') or details.get('description') else 'Free game on Google Play sale',
+                                'image_url': details.get('icon', ''),
+                                'game_url': f"https://play.google.com/store/apps/details?id={app_id}",
+                                'original_price': 'On Sale',
+                                'end_date': 'Limited time',
+                                'store_logo': 'https://www.gstatic.com/android/market_images/web/favicon_v2.ico'
+                            })
+                            
+                            if len(games) >= 10:
+                                break
+                                
+                    except Exception as e:
+                        logger.debug(f"Error checking sale game {app_info.get('appId', 'unknown')}: {e}")
+                        continue
+                        
+            except Exception as e:
+                logger.warning(f"Could not access sales collection: {e}")
+            
+            # If we didn't find anything from the sales collection, try searching
+            if len(games) == 0:
+                logger.info("Searching for free games as fallback...")
+                
+                search_queries = [
+                    'free games sale',
+                    'limited time free',
+                    'temporarily free'
+                ]
+                
+                for query in search_queries:
+                    try:
+                        results = search(query, lang='en', country='au', n_hits=15)
+                        
+                        for result in results:
+                            app_id = result.get('appId')
+                            if app_id in checked_apps:
+                                continue
+                            checked_apps.add(app_id)
+                            
+                            try:
+                                details = gplay_app(app_id, lang='en', country='au')
+                                
+                                if details.get('free') and details.get('price', 0) == 0:
+                                    title = details.get('title', 'Unknown Game')
+                                    description = details.get('summary', details.get('description', '')).lower()
+                                    
+                                    # Only include if description mentions being on sale/limited
+                                    if any(word in description for word in ['sale', 'free', 'limited', 'discount', 'was ']):
+                                        games.append({
+                                            'title': title,
+                                            'store': self.store_name,
+                                            'platform': self.platform,
+                                            'description': details.get('summary', details.get('description', ''))[:200] + '...' if details.get('summary') or details.get('description') else 'Free Android game',
+                                            'image_url': details.get('icon', ''),
+                                            'game_url': f"https://play.google.com/store/apps/details?id={app_id}",
+                                            'original_price': 'Was Paid',
+                                            'end_date': 'Limited time',
+                                            'store_logo': 'https://www.gstatic.com/android/market_images/web/favicon_v2.ico'
+                                        })
+                                        
+                                        if len(games) >= 10:
+                                            break
+                                            
+                            except Exception as e:
+                                logger.debug(f"Error checking app {app_id}: {e}")
+                                continue
+                        
+                        if len(games) >= 10:
+                            break
+                            
+                    except Exception as e:
+                        logger.warning(f"Error searching for '{query}': {e}")
+                        continue
             
             logger.info(f"Found {len(games)} free games on Google Play")
             return games
